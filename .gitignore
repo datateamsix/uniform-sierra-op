@@ -1,0 +1,51 @@
+ Ignore Node.js dependencies
+frontend/node_modules/
+
+# Ignore build output for React
+frontend/build/
+
+# Ignore environment variable files
+frontend/.env
+backend/.env
+
+# Ignore macOS system files
+.DS_Store
+
+# Ignore Go build output
+backend/bin/
+backend/*.exe
+backend/*.out
+
+# Ignore Go dependencies and cache
+backend/pkg/
+backend/go.sum
+
+# General IDE/editor settings
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# production
+/build
+
+# misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
