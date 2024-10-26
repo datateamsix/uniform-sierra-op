@@ -1,0 +1,51 @@
+version: "3.8"
+
+services:
+  db: 
+    image: postgres:15
+    container_name: url_shortener_db
+    environment:
+      POSTGRES_USER: madpy
+      POSTGRES_PASSWORD: hacker301#
+      POSTGRES_DB: url_shortener
+    ports:
+      - 5432:5432
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks: app-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: url_shortener_backend
+    environment:
+      DB_PORT: 8080
+      SAFE_BROWSING_API_KEY: ${SAFE_BROWSING_API_KEY}
+      DB_CONNECTION_STRING: postgres://your_db_user:your_db_password@db:5432/urlshortener?sslmode=disable    
+    ports:
+      - 8080:8080
+    depends_on:
+      - db
+    networks: 
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: url_shortener_frontend 
+    ports:
+      - 3000:80
+    depends_on:
+      - backend 
+    networks:
+     - app-network 
+
+volumes:
+  db_data:
+
+networks:
+  app-network:
+    driver: bridge 
+    
