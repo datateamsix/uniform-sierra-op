@@ -1,46 +1,41 @@
-# backend/Dockerfile 
-
-#Stage 1: Build the GO application
-FROM golang:1.22.3-alpine as builder
+# Stage 1: Build the Go app
+FROM golang:1.20-alpine AS builder
 
 # Set environment variables
-ENV GO111MODULE=on \
-    CGO_ENABLED=0 \
-    GOOS=linux \
-    GOARCH=amd64
+ENV GO111MODULE=on
 
-#Install the necessary packages and dependencies
+# Install necessary packages
 RUN apk update && apk add --no-cache git
 
-# Set the working directory inside the container
+# Set working directory
 WORKDIR /app
 
-#Copy the go mod and sum files
+# Copy go.mod and go.sum
 COPY go.mod go.sum ./
 
-#Download the dependencies
-RUN go mod download 
+# Download dependencies
+RUN go mod download
 
-#Copy the source code into the container
+# Copy the source code
 COPY . .
 
-#Build the GO Application 
-RUN go build -o main ./cmd/url-shortener-api/main.go
+# Build the Go app
+RUN go build -o main .
 
-#Stage 2: Run Go App in minimal container
+# Stage 2: Run the Go app in a minimal container
 FROM alpine:latest
 
-#Install the necessary packages and dependencies
-RUN apk update && apk add --no-cache ca-certificates
+# Install necessary packages
+RUN apk --no-cache add ca-certificates
 
-#Set the working directory 
+# Set working directory
 WORKDIR /root/
 
-# Copy the binary from the builder stage 
+# Copy the binary from the builder stage
 COPY --from=builder /app/main .
 
-#Expose the port that the application listens on
+# Expose the port
 EXPOSE 8080
 
-#Command to run the executable
-CMD ["./main"]  
+# Command to run the executable
+CMD ["./main"]
