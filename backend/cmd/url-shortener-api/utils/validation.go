@@ -17,7 +17,6 @@ var (
 	ErrInvalidURLSyntax          = errors.New("invalid URL syntax")
 	ErrURLNotHTTPS               = errors.New("URL scheme is not HTTPS")
 	ErrURLRedirect               = errors.New("URL redirects to another location")
-	ErrURLNotLive                = errors.New("URL is not live")
 	ErrSafeBrowsingAPIKeyMissing = errors.New("safe browsing API key is not set")
 )
 
@@ -31,6 +30,12 @@ type SafeBrowsingResponse struct {
 			URL string `json:"url"`
 		} `json:"threat"`
 	} `json:"matches"`
+}
+
+// SafeBrowsingResult represents the result of a Safe Browsing check
+type SafeBrowsingResult struct {
+	IsSafe  bool   `json:"is_safe"`
+	Message string `json:"message"`
 }
 
 // ValidateURLSyntax ensures the URL is properly formatted and uses HTTPS.
@@ -70,10 +75,12 @@ func CheckRedirects(inputURL string) error {
 }
 
 // CheckSafeBrowsing uses Google's Safe Browsing API to check the URL.
-func CheckSafeBrowsing(cfg config.Config, inputURL string) error {
+func CheckSafeBrowsing(cfg config.Config, inputURL string) (SafeBrowsingResult, error) {
+	result := SafeBrowsingResult{IsSafe: true, Message: "URL is safe"}
+
 	apiKey := cfg.SafeBrowsingAPIKey
 	if apiKey == "" {
-		return ErrSafeBrowsingAPIKeyMissing
+		return result, ErrSafeBrowsingAPIKeyMissing
 	}
 
 	endpoint := fmt.Sprintf("https://safebrowsing.googleapis.com/v4/threatMatches:find?key=%s", apiKey)
@@ -94,43 +101,68 @@ func CheckSafeBrowsing(cfg config.Config, inputURL string) error {
 
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	resp, err := http.Post(endpoint, "application/json", strings.NewReader(string(jsonData)))
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer resp.Body.Close()
 
 	var sbResp SafeBrowsingResponse
 	err = json.NewDecoder(resp.Body).Decode(&sbResp)
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	if len(sbResp.Matches) > 0 {
-		return fmt.Errorf("URL is unsafe: %s", inputURL)
+		result.IsSafe = false
+		result.Message = fmt.Sprintf("URL is unsafe: %s. Threat type: %s", inputURL, sbResp.Matches[0].ThreatType)
 	}
 
-	return nil
+	return result, nil
 }
 
-// CheckIfURLIsLive performs a HEAD request to check if the URL is live.
-func CheckIfURLIsLive(inputURL string) error {
+// URLCheckResult represents the result of URL checks
+type URLCheckResult struct {
+	StatusCode  int    `json:"status_code"`
+	IsHTTPS     bool   `json:"is_https"`
+	RedirectURL string `json:"redirect_url,omitempty"`
+}
+
+func CheckURLStatus(inputURL string) (URLCheckResult, error) {
+	result := URLCheckResult{IsHTTPS: false}
+
+	// Validate URL syntax
+	parsedURL, err := url.Parse(inputURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return result, fmt.Errorf("%w: %s", ErrInvalidURLSyntax, inputURL)
+	}
+
+	// Check if the URL uses HTTPS
+	result.IsHTTPS = parsedURL.Scheme == "https"
+
+	// Check the URL status
 	client := &http.Client{
 		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 
 	resp, err := client.Head(inputURL)
 	if err != nil {
-		return fmt.Errorf("failed to check if URL is live: %w", err)
+		return result, fmt.Errorf("failed to check URL status: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return fmt.Errorf("%w: %s (status code: %d)", ErrURLNotLive, inputURL, resp.StatusCode)
+	result.StatusCode = resp.StatusCode
+
+	// Check for redirect and get the redirect URL
+	if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
+		result.RedirectURL = resp.Header.Get("Location")
 	}
 
-	return nil
+	return result, nil
 }
