@@ -1,5 +1,5 @@
 # Stage 1: Build the Go app
-FROM golang:1.20-alpine AS builder
+FROM golang:1.23.1-alpine AS builder
 
 # Set environment variables
 ENV GO111MODULE=on
@@ -10,17 +10,15 @@ RUN apk update && apk add --no-cache git
 # Set working directory
 WORKDIR /app
 
-# Copy go.mod and go.sum
-COPY go.mod go.sum ./
+# Copy go.mod and go.sum from the correct subdirectory
+COPY cmd/url-shortener-api/go.mod cmd/url-shortener-api/go.sum ./
 
 # Download dependencies
 RUN go mod download
 
-# Copy the source code
+# Build the application
 COPY . .
-
-# Build the Go app
-RUN go build -o main .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/url-shortener-api
 
 # Stage 2: Run the Go app in a minimal container
 FROM alpine:latest
