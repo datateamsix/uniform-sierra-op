@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"time"
 
@@ -14,32 +13,28 @@ import (
 	"url-shortener/models"
 	"url-shortener/utils"
 
-	"github.com/go-co-op/gocron"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // ShortenURLRequest represents the expected payload for shortening URLs.
 type ShortenURLRequest struct {
-	URL              string     `json:"url"`
-	IntendedLiveDate *time.Time `json:"intended_live_date,omitempty"` // Optional field
+	URL                string     `json:"url"`
+	IntendedLiveDate   *time.Time `json:"intended_live_date,omitempty"`
+	IntendedExpiryDate *time.Time `json:"intended_expiry_date,omitempty"`
 }
 
 // ShortenURLResponse represents the response payload.
 type ShortenURLResponse struct {
-	ShortURL string `json:"short_url"`
+	ShortURL           string     `json:"short_url"`
+	Status             string     `json:"status"`
+	IntendedLiveDate   *time.Time `json:"intended_live_date,omitempty"`
+	IntendedExpiryDate *time.Time `json:"intended_expiry_date,omitempty"`
 }
 
 // ErrorResponse represents an error response.
 type ErrorResponse struct {
 	Message string `json:"message"`
-}
-
-var scheduler *gocron.Scheduler
-
-func init() {
-	scheduler = gocron.NewScheduler(time.UTC)
-	scheduler.StartAsync()
 }
 
 // ShortenURL handles the URL shortening logic.
@@ -58,41 +53,30 @@ func ShortenURL(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		// Check for Redirects (301/302)
-		hasRedirect, redirectCount := utils.CheckRedirects(req.URL)
-		if hasRedirect {
-			log.Printf("URL has %d redirects: %s", redirectCount, req.URL)
-			// Optionally, assign a risk score or take other actions
-		}
-
-		// Check against Safe Browsing API
-		isSafe := utils.CheckSafeBrowsing(*cfg, req.URL)
-		if !isSafe {
-			log.Println("URL flagged as unsafe:", req.URL)
-			respondWithError(w, "This URL is potentially unsafe.", http.StatusBadRequest)
-			return
-		}
-
-		// Check if the URL is live by performing a HEAD request
-		isLive, err := utils.CheckIfURLIsLive(req.URL)
+		// Check URL status
+		urlCheckResult, err := utils.CheckURLStatus(req.URL)
 		if err != nil {
-			log.Println("Error checking URL live status:", err)
+			log.Println("Error checking URL status:", err)
 			respondWithError(w, "Error checking URL status. Please try again.", http.StatusInternalServerError)
 			return
 		}
 
-		// Initialize status and intended live date
+		// Determine if the URL is live based on the status code
+		isLive := urlCheckResult.StatusCode >= 200 && urlCheckResult.StatusCode < 300
 		status := "live"
 		if !isLive {
-			status = "inactive" // Or "pending"
-			// If the user provided an IntendedLiveDate, use it
-			if req.IntendedLiveDate != nil {
-				// Ensure the date is in the future
-				if req.IntendedLiveDate.Before(time.Now()) {
-					respondWithError(w, "Intended live date must be in the future.", http.StatusBadRequest)
-					return
-				}
-			}
+			status = "inactive"
+		}
+
+		// Validate dates
+		now := time.Now()
+		if req.IntendedExpiryDate != nil && req.IntendedExpiryDate.Before(now) {
+			respondWithError(w, "Expiry date cannot be in the past", http.StatusBadRequest)
+			return
+		}
+		if req.IntendedLiveDate != nil && req.IntendedExpiryDate != nil && req.IntendedLiveDate.After(*req.IntendedExpiryDate) {
+			respondWithError(w, "Live date cannot be after expiry date", http.StatusBadRequest)
+			return
 		}
 
 		// Proceed to shorten the URL
@@ -100,11 +84,12 @@ func ShortenURL(cfg *config.Config) http.HandlerFunc {
 
 		// Save to database
 		urlMapping := models.UrlMapping{
-			ShortCode:        shortCode,
-			OriginalUrl:      req.URL,
-			IntendedLiveDate: req.IntendedLiveDate,
-			Status:           status,
-			LastCheckedAt:    time.Now(),
+			ShortCode:          shortCode,
+			OriginalUrl:        req.URL,
+			IntendedLiveDate:   req.IntendedLiveDate,
+			IntendedExpiryDate: req.IntendedExpiryDate,
+			Status:             status,
+			LastCheckedAt:      time.Now(),
 		}
 
 		if err := db.DB.Create(&urlMapping).Error; err != nil {
@@ -113,16 +98,16 @@ func ShortenURL(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		// If the URL is not live and an intended live date is set, schedule a check
-		if !isLive && req.IntendedLiveDate != nil {
-			scheduleURLCheck(urlMapping.ID, *req.IntendedLiveDate)
-		}
-
 		// Construct the shortened URL
 		shortURL := constructShortURL(r, shortCode)
 
-		// Respond with the shortened URL
-		response := ShortenURLResponse{ShortURL: shortURL}
+		// Respond with the shortened URL and additional information
+		response := ShortenURLResponse{
+			ShortURL:           shortURL,
+			Status:             status,
+			IntendedLiveDate:   urlMapping.IntendedLiveDate,
+			IntendedExpiryDate: urlMapping.IntendedExpiryDate,
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 	}
@@ -138,8 +123,15 @@ func RedirectURL() http.HandlerFunc {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				http.Error(w, "URL not found.", http.StatusNotFound)
 			} else {
+				log.Printf("Error retrieving URL mapping: %v", err)
 				http.Error(w, "Internal server error.", http.StatusInternalServerError)
 			}
+			return
+		}
+
+		// Check if the URL has expired
+		if urlMapping.IntendedExpiryDate != nil && time.Now().After(*urlMapping.IntendedExpiryDate) {
+			http.Error(w, "This URL has expired.", http.StatusGone)
 			return
 		}
 
@@ -154,7 +146,6 @@ func RedirectURL() http.HandlerFunc {
 }
 
 // Helper functions
-
 func respondWithError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
@@ -172,55 +163,4 @@ func constructShortURL(r *http.Request, shortCode string) string {
 	}
 	host := r.Host
 	return fmt.Sprintf("%s://%s/%s", scheme, host, shortCode)
-}
-
-func getIPAddress(r *http.Request) string {
-	ip := r.Header.Get("X-Forwarded-For")
-	if ip == "" {
-		ip, _, _ = net.SplitHostPort(r.RemoteAddr)
-	}
-	return ip
-}
-
-func logMaliciousURL(url, userAgent, ipAddress string) {
-	logEntry := models.MaliciousLog{
-		URL:       url,
-		UserAgent: userAgent,
-		IPAddress: ipAddress,
-		RiskScore: 5, // Example risk score
-		Details:   "Failed Safe Browsing check",
-	}
-
-	if err := db.DB.Create(&logEntry).Error; err != nil {
-		log.Println("Error logging malicious URL:", err)
-	}
-}
-
-// scheduleURLCheck schedules a periodic check for the URL status
-func scheduleURLCheck(urlID uint, intendedLiveDate time.Time) {
-	_, err := scheduler.ScheduleOnce(intendedLiveDate, func() {
-		var urlMapping models.UrlMapping
-		if err := db.DB.First(&urlMapping, urlID).Error; err != nil {
-			log.Println("Error fetching URL mapping for scheduled check:", err)
-			return
-		}
-
-		// Check if the URL is live
-		isLive, err := utils.CheckIfURLIsLive(urlMapping.OriginalUrl)
-		if err != nil {
-			log.Println("Error during scheduled URL live check:", err)
-			return
-		}
-
-		if isLive {
-			db.DB.Model(&urlMapping).Update("status", "live")
-			log.Printf("URL ID %d is now live.\n", urlID)
-		} else {
-			log.Printf("URL ID %d is still not live.\n", urlID)
-		}
-	})
-
-	if err != nil {
-		log.Println("Error scheduling URL check:", err)
-	}
 }
