@@ -2,20 +2,25 @@ package db
 
 import (
 	"log"
+	"os"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
 	//Load project config and models
-	"url-shortener/config"
 	"url-shortener/models"
 )
 
 var DB *gorm.DB
 
-func InitDatabase(cfg config.Config) {
+func InitDatabase() {
 	var err error
-	DB, err = gorm.Open(postgres.Open(cfg.DBConnectionString), &gorm.Config{})
+	dbConnectionString := os.Getenv("DB_CONNECTION_STRING")
+	if dbConnectionString == "" {
+		log.Fatal("DB_CONNECTION_STRING environment variable is not set")
+	}
+
+	DB, err = gorm.Open(postgres.Open(dbConnectionString), &gorm.Config{})
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
@@ -25,4 +30,6 @@ func InitDatabase(cfg config.Config) {
 	if err != nil {
 		log.Fatal("Failed to migrate database:", err)
 	}
+
+	log.Println("Database connection established and migrations completed")
 }

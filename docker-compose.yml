@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   db:
     image: postgres:13
@@ -7,21 +9,26 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "${DB_PORT}:5432"
     networks:
       - app-network
 
   backend:
     build:
       context: ./backend
-      dockerfile: cmd/url-shortener-api/Dockerfile
+      dockerfile: Dockerfile  
     container_name: urlshortener_backend
     environment:
       PORT: ${PORT}
       SAFE_BROWSING_API_KEY: ${SAFE_BROWSING_API_KEY}
-      DB_CONNECTION_STRING: postgres://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT}/${DB_NAME}?sslmode=disable
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_CONNECTION_STRING: ${DB_CONNECTION_STRING}
     ports:
       - "${PORT}:${PORT}"
     depends_on:
@@ -44,7 +51,7 @@ services:
       - app-network
 
 volumes:
-  db_data:
+  postgres_data:
 
 networks:
   app-network:

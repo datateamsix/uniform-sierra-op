@@ -10,14 +10,14 @@ RUN apk update && apk add --no-cache git
 # Set working directory
 WORKDIR /app
 
-# Copy go.mod and go.sum from the correct subdirectory
-COPY cmd/url-shortener-api/go.mod cmd/url-shortener-api/go.sum ./
+# Copy go.mod and go.sum
+COPY backend/cmd/url-shortener-api/go.mod backend/cmd/url-shortener-api/go.sum ./
 
 # Download dependencies
 RUN go mod download
 
 # Copy the rest of the source code
-COPY . .
+COPY backend/cmd/url-shortener-api/ ./
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
